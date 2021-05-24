@@ -4,6 +4,8 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
+import skimage.color
+import skimage.exposure
 from scipy import ndimage as ndi
 
 from ...utils import config
@@ -26,7 +28,7 @@ from ..utils.color_transformations import transform_color
 from ..utils.layer_utils import _FeatureTable
 from ._labels_constants import LabelColorMode, LabelsRendering, Mode
 from ._labels_mouse_bindings import draw, pick
-from ._labels_utils import indices_in_shape, sphere_indices
+from ._labels_utils import indices_in_shape, sphere_indices, label_masks
 
 _REV_SHAPE_HELP = {
     trans._('enter paint or fill mode to edit labels'): {
@@ -134,6 +136,9 @@ class Labels(_ImageBase):
         Each dict defines a clipping plane in 3D in data coordinates.
         Valid dictionary keys are {'position', 'normal', and 'enabled'}.
         Values on the negative side of the normal are discarded if the plane is enabled.
+        should be the largest.
+    mask_axis : Optional[int]
+        Index for the mask axis, if data is a stack of masks.
 
     Attributes
     ----------
@@ -239,6 +244,7 @@ class Labels(_ImageBase):
         cache=True,
         experimental_slicing_plane=None,
         experimental_clipping_planes=None,
+        mask_axis=None,
     ):
         if name is None and data is not None:
             name = magic_name(data)
@@ -254,6 +260,26 @@ class Labels(_ImageBase):
 
         data = self._ensure_int_labels(data)
         self._color_lookup_func = None
+
+        if properties is None:
+            self._properties = {}
+            label_index = {}
+        else:
+            properties = self._validate_properties(properties)
+            self._properties, label_index = dataframe_to_properties(properties)
+        if label_index is None:
+            props = self._properties
+            if len(props) > 0:
+                self._label_index = self._map_index(properties)
+            else:
+                self._label_index = {}
+        else:
+            self._label_index = label_index
+
+        self.mask_axis = mask_axis
+
+        if self.mask_axis is not None:
+            data = label_masks(data, self.mask_axis)
 
         super().__init__(
             data,
@@ -963,6 +989,35 @@ class Labels(_ImageBase):
             )
         else:
             raise ValueError("Unsupported Color Mode")
+
+        if self.contour > 0 and raw.ndim == 2:
+            image = np.zeros_like(raw)
+            struct_elem = ndi.generate_binary_structure(raw.ndim, 1)
+            thickness = self.contour
+            thick_struct_elem = ndi.iterate_structure(
+                struct_elem, thickness
+            ).astype(bool)
+            boundaries = ndi.grey_dilation(
+                raw, footprint=struct_elem
+            ) != ndi.grey_erosion(raw, footprint=thick_struct_elem)
+            image[boundaries] = raw[boundaries]
+            image = self._all_vals[image]
+        elif self.contour > 0 and raw.ndim > 2:
+            warnings.warn(
+                trans._(
+                    "Contours are not displayed during 3D rendering",
+                    deferred=True,
+                )
+            )
+
+        if self.mask_axis is not None:
+            image = np.zeros(self.data.shape[1:], np.uint8)
+
+            for mask in self.data:
+                image[mask != 0] = np.unique(mask)[-1]
+
+            image = skimage.color.label2rgb(image, bg_label=0)
+
         return image
 
     def new_colormap(self):
@@ -1147,6 +1202,9 @@ class Labels(_ImageBase):
             Whether to refresh view slice or not. Set to False to batch paint
             calls.
         """
+        if self.mask_axis:
+            raise NotImplementedError
+
         int_coord = tuple(np.round(coord).astype(int))
         # If requested fill location is outside data shape then return
         if np.any(np.less(int_coord, 0)) or np.any(
@@ -1223,6 +1281,9 @@ class Labels(_ImageBase):
             Whether to refresh view slice or not. Set to False to batch paint
             calls.
         """
+        if self.mask_axis:
+            raise NotImplementedError
+
         shape = self.data.shape
         dims_to_paint = sorted(self._dims_order[-self.n_edit_dimensions :])
         dims_not_painted = sorted(self._dims_order[: -self.n_edit_dimensions])
