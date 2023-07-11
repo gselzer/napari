@@ -158,7 +158,7 @@ class ViewerOverlayMixin:
             parent=parent,
         )
         self.viewer = viewer
-        self.viewer._overlays.events.removed.connect(self.close)
+        # self.viewer._overlays.events.removed.connect(self.close)
 
     def close(self):
         disconnect_events(self.viewer.events, self)
