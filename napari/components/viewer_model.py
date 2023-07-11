@@ -107,9 +107,9 @@ def _current_theme() -> str:
 
 
 DEFAULT_OVERLAYS = {
-    'scale_bar': ScaleBarOverlay,
-    'text': TextOverlay,
-    'axes': AxesOverlay,
+    # 'scale_bar': ScaleBarOverlay,
+    # 'text': TextOverlay,
+    # 'axes': AxesOverlay,
 }
 
 
